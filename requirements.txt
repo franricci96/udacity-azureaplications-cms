@@ -30,4 +30,4 @@ six
 SQLAlchemy
 urllib3
 Werkzeug
-WTForms
+WTForms==2.2.1
