@@ -80,16 +80,24 @@ def login():
 @app.route(Config.REDIRECT_PATH)  # Its absolute URL must match your app's redirect_uri set in AAD
 def authorized():
     if request.args.get('state') != session.get("state"):
+        app.logger.warning("authorized: state mismatch; possible CSRF or expired session")
         return redirect(url_for("home"))  # No-OP. Goes back to Index page
     if "error" in request.args:  # Authentication/Authorization failure
+        app.logger.error("authorized: MSAL returned error in query params", extra={"error": request.args.get('error'), "error_description": request.args.get('error_description')})
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
-        # TODO: Acquire a token from a built msal app, along with the appropriate redirect URI
-        result = None
+        app.logger.info("authorized: exchanging auth code for tokens via MSAL")
+        result = _build_msal_app(cache=cache).acquire_token_by_authorization_code(
+            request.args['code'],
+            scopes=Config.SCOPE,
+            redirect_uri=url_for("authorized", _external=True, _scheme='https'))
         if "error" in result:
+            app.logger.error("authorized: token exchange failed", extra={"error": result.get('error'), "error_description": result.get('error_description')})
             return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
+        user_name = session["user"].get("name") or "admin"
+        app.logger.info("authorized: Azure AD login success for '%s'", user_name)
         # Note: In a real app, we'd use the 'name' property from session["user"] below
         # Here, we'll use the admin username for anyone who is authenticated by MS
         user = User.query.filter_by(username="admin").first()
