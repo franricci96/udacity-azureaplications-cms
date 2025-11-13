@@ -1,10 +1,11 @@
+
 """
 Routes and views for the flask application.
 """
 
 from datetime import datetime
 from flask import render_template, flash, redirect, request, session, url_for
-from werkzeug.urls import url_parse
+from urllib.parse import urlparse                     # <-- cambio aquí
 from config import Config
 from FlaskWebProject import app, db
 from FlaskWebProject.forms import LoginForm, PostForm
@@ -13,7 +14,7 @@ from FlaskWebProject.models import User, Post
 import msal
 import uuid
 
-imageSourceUrl = 'https://'+ app.config['BLOB_ACCOUNT']  + '.blob.core.windows.net/' + app.config['BLOB_CONTAINER']  + '/'
+imageSourceUrl = 'https://' + app.config['BLOB_ACCOUNT'] + '.blob.core.windows.net/' + app.config['BLOB_CONTAINER'] + '/'
 
 @app.route('/')
 @app.route('/home')
@@ -41,7 +42,6 @@ def new_post():
         imageSource=imageSourceUrl,
         form=form
     )
-
 
 @app.route('/post/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -73,20 +73,23 @@ def login():
         login_user(user, remember=form.remember_me.data)
         app.logger.info("login: local credentials validated for '%s'", user.username)
         next_page = request.args.get('next')
-        if not next_page or url_parse(next_page).netloc != '':
+        # Solo permitir redirecciones internas
+        if not next_page or urlparse(next_page).netloc:
             next_page = url_for('home')
         return redirect(next_page)
     session["state"] = str(uuid.uuid4())
     auth_url = _build_auth_url(scopes=Config.SCOPE, state=session["state"])
     return render_template('login.html', title='Sign In', form=form, auth_url=auth_url)
 
-@app.route(Config.REDIRECT_PATH)  # Its absolute URL must match your app's redirect_uri set in AAD
+@app.route(Config.REDIRECT_PATH)
 def authorized():
     if request.args.get('state') != session.get("state"):
         app.logger.warning("authorized: state mismatch; possible CSRF or expired session")
-        return redirect(url_for("home"))  # No-OP. Goes back to Index page
-    if "error" in request.args:  # Authentication/Authorization failure
-        app.logger.error("authorized: MSAL returned error in query params", extra={"error": request.args.get('error'), "error_description": request.args.get('error_description')})
+        return redirect(url_for("home"))
+    if "error" in request.args:
+        app.logger.error("authorized: MSAL returned error in query params",
+                         extra={"error": request.args.get('error'),
+                                "error_description": request.args.get('error_description')})
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
@@ -96,13 +99,13 @@ def authorized():
             scopes=Config.SCOPE,
             redirect_uri=url_for("authorized", _external=True, _scheme='https'))
         if "error" in result:
-            app.logger.error("authorized: token exchange failed", extra={"error": result.get('error'), "error_description": result.get('error_description')})
+            app.logger.error("authorized: token exchange failed",
+                             extra={"error": result.get('error'),
+                                    "error_description": result.get('error_description')})
             return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
         user_name = session["user"].get("name") or "admin"
         app.logger.info("authorized: Azure AD login success for '%s'", user_name)
-        # Note: In a real app, we'd use the 'name' property from session["user"] below
-        # Here, we'll use the admin username for anyone who is authenticated by MS
         user = User.query.filter_by(username="admin").first()
         login_user(user)
         _save_cache(cache)
@@ -112,11 +115,9 @@ def authorized():
 def logout():
     logout_user()
     app.logger.info("logout: user logged out of local session")
-    if session.get("user"): # Used MS Login
-        # Wipe out user and its token cache from session
+    if session.get("user"):
         app.logger.info("logout: clearing MSAL session and redirecting to AAD logout")
         session.clear()
-        # Also logout from your tenant's web session
         return redirect(
             Config.AUTHORITY + "/oauth2/v2.0/logout" +
             "?post_logout_redirect_uri=" + url_for("login", _external=True))
