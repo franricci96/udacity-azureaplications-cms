@@ -1,14 +1,34 @@
+
 from datetime import datetime
 from FlaskWebProject import app, db, login
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin
-from azure.storage.blob import BlockBlobService
+# 👇 Nuevo SDK (v12)
+from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+
 import string, random
 from werkzeug.utils import secure_filename
 from flask import flash
 
+# =========================================
+# Config & clientes de Blob Storage (v12)
+# =========================================
 blob_container = app.config['BLOB_CONTAINER']
-blob_service = BlockBlobService(account_name=app.config['BLOB_ACCOUNT'], account_key=app.config['BLOB_STORAGE_KEY'])
+
+# Usamos account_name + account_key (mismo esquema que tenías)
+# Si preferís connection string: BlobServiceClient.from_connection_string(app.config['BLOB_CONNECTION_STRING'])
+account_url = f"https://{app.config['BLOB_ACCOUNT']}.blob.core.windows.net"
+blob_service = BlobServiceClient(account_url=account_url,
+                                 credential=app.config['BLOB_STORAGE_KEY'])
+
+# Cliente del contenedor (lo creamos si no existe)
+container_client = blob_service.get_container_client(blob_container)
+try:
+    # create_container() falla si existe; por eso controlamos ResourceExistsError
+    container_client.create_container()
+except ResourceExistsError:
+    pass
 
 def id_generator(size=32, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for _ in range(size))
@@ -51,18 +71,34 @@ class Post(db.Model):
         self.body = form.body.data
         self.user_id = userId
 
-        if file:
-            filename = secure_filename(file.filename);
-            fileextension = filename.rsplit('.',1)[1];
-            Randomfilename = id_generator();
-            filename = Randomfilename + '.' + fileextension;
+        if file and getattr(file, "filename", ""):
+            # Normalizamos el filename y generamos uno aleatorio preservando extensión (si tiene)
+            original = secure_filename(file.filename)
+            ext = ""
+            if "." in original:
+                ext = "." + original.rsplit(".", 1)[1].lower()
+
+            filename = f"{id_generator()}{ext}"
+
             try:
-                blob_service.create_blob_from_stream(blob_container, filename, file)
-                if(self.image_path):
-                    blob_service.delete_blob(blob_container, self.image_path)
-            except Exception:
-                flash(Exception)
-            self.image_path =  filename
+                # Nota: file es un werkzeug.datastructures.FileStorage -> .stream es el binario
+                container_client.upload_blob(name=filename, data=file.stream, overwrite=True)
+
+                # Si ya había imagen anterior, intentamos borrarla
+                if self.image_path:
+                    try:
+                        container_client.delete_blob(self.image_path)
+                    except ResourceNotFoundError:
+                        # Si no existe, no pasa nada
+                        pass
+
+                self.image_path = filename
+
+            except Exception as e:
+                # Mostramos feedback y dejamos trazas
+                app.logger.exception("Blob upload failed")
+                flash(f"Error subiendo imagen al blob: {e}")
+
         if new:
             db.session.add(self)
         db.session.commit()
