@@ -1,7 +1,7 @@
 alembic
 azure-common==1.1.24
 azure-nspkg==3.0.2
-azure-storage==0.36.0
+azure-storage-blob
 certifi==2019.11.28
 cffi
 chardet==3.0.4
