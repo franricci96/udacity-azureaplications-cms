@@ -11,7 +11,7 @@ Flask
 Flask-Login
 Flask-Session
 Flask-SQLAlchemy
-Flask-WTF
+Flask-WTF==1.1.1
 idna
 itsdangerous
 Jinja2
